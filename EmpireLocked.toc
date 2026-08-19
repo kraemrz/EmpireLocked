@@ -1,0 +1,14 @@
+## Interface: 11509
+## Title: Empire Locked
+## Notes: Account-wide self-imposed Hardcore empire challenge.
+## Author: Kramer (tester/executioner) + ChatGPT (coder)
+## Version: 0.6.5
+## SavedVariables: EmpireLockedDB
+
+Database.lua
+Inventory.lua
+Professions.lua
+Gear.lua
+UI.lua
+Core.lua
+Commands.lua
