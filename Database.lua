@@ -5,9 +5,16 @@ EL.VERSION = "0.6.2"
 
 local function DefaultDB()
     return {
-        schemaVersion = 1,
-        empire = nil,
+        schemaVersion = 2,
+        realms = {},
     }
+end
+
+function EL:GetRealmKey()
+    local realm = GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName()
+    realm = realm or "UnknownRealm"
+    realm = realm:gsub("%s+", "")
+    return realm
 end
 
 function EL:InitDB()
@@ -15,14 +22,54 @@ function EL:InitDB()
         EmpireLockedDB = DefaultDB()
     end
 
-    if not EmpireLockedDB.schemaVersion then
-        EmpireLockedDB.schemaVersion = 1
+    EmpireLockedDB.realms = EmpireLockedDB.realms or {}
+
+    local realmKey = self:GetRealmKey()
+
+    -- v0.6.5 -> v0.6.6 migration.
+    -- Old data was account-wide at the DB root. On the first login after
+    -- upgrading, move that data into the realm currently being played.
+    if EmpireLockedDB.schemaVersion ~= 2 then
+        if EmpireLockedDB.empire or (EmpireLockedDB.chronicles and #EmpireLockedDB.chronicles>0) then
+            EmpireLockedDB.realms[realmKey] = EmpireLockedDB.realms[realmKey] or {}
+            local realmDB = EmpireLockedDB.realms[realmKey]
+
+            if not realmDB.empire and EmpireLockedDB.empire then
+                realmDB.empire = EmpireLockedDB.empire
+            end
+            if not realmDB.chronicles then
+                realmDB.chronicles = EmpireLockedDB.chronicles or {}
+            end
+
+            EmpireLockedDB.empire = nil
+            EmpireLockedDB.chronicles = nil
+        end
+        EmpireLockedDB.schemaVersion = 2
     end
-    EmpireLockedDB.chronicles = EmpireLockedDB.chronicles or {}
+
+    EmpireLockedDB.realms[realmKey] = EmpireLockedDB.realms[realmKey] or {
+        empire = nil,
+        chronicles = {},
+    }
+    EmpireLockedDB.realms[realmKey].chronicles =
+        EmpireLockedDB.realms[realmKey].chronicles or {}
 end
 
 function EL:GetDB()
     return EmpireLockedDB
+end
+
+function EL:GetRealmDB()
+    if not EmpireLockedDB then self:InitDB() end
+    local realmKey=self:GetRealmKey()
+    EmpireLockedDB.realms = EmpireLockedDB.realms or {}
+    EmpireLockedDB.realms[realmKey] = EmpireLockedDB.realms[realmKey] or {
+        empire=nil,
+        chronicles={},
+    }
+    local realmDB=EmpireLockedDB.realms[realmKey]
+    realmDB.chronicles=realmDB.chronicles or {}
+    return realmDB
 end
 
 function EL:EnsureChronicle()
@@ -53,7 +100,8 @@ function EL:EnsureChronicle()
 end
 
 function EL:GetEmpire()
-    return EmpireLockedDB and EmpireLockedDB.empire or nil
+    local realmDB=self:GetRealmDB()
+    return realmDB and realmDB.empire or nil
 end
 
 function EL:HasEmpire()
@@ -65,7 +113,8 @@ function EL:CreateEmpire(name)
         return false, "Du måste ange ett namn."
     end
 
-    EmpireLockedDB.empire = {
+    local realmDB=self:GetRealmDB()
+    realmDB.empire = {
         name = name,
         runID = time(),
         createdAt = time(),
@@ -189,7 +238,8 @@ function EL:ArchiveCurrentEmpire(reason)
     local empire = self:GetEmpire()
     if not empire then return false end
 
-    EmpireLockedDB.chronicles = EmpireLockedDB.chronicles or {}
+    local realmDB=self:GetRealmDB()
+    realmDB.chronicles = realmDB.chronicles or {}
     local ch = self:EnsureChronicle() or {}
 
     -- Freeze a compact historical snapshot. Do not retain inventory/bank
@@ -239,12 +289,13 @@ function EL:ArchiveCurrentEmpire(reason)
         })
     end
 
-    table.insert(EmpireLockedDB.chronicles, archive)
+    table.insert(realmDB.chronicles, archive)
     return true
 end
 
 function EL:AddDebugChronicleArchive()
-    EmpireLockedDB.chronicles = EmpireLockedDB.chronicles or {}
+    local realmDB=self:GetRealmDB()
+    realmDB.chronicles = realmDB.chronicles or {}
 
     local now=time()
     local archive={
@@ -274,20 +325,21 @@ function EL:AddDebugChronicleArchive()
         debug=true,
     }
 
-    table.insert(EmpireLockedDB.chronicles,archive)
-    return #EmpireLockedDB.chronicles
+    table.insert(realmDB.chronicles,archive)
+    return #realmDB.chronicles
 end
 
 function EL:GetChronicleArchive()
-    EmpireLockedDB.chronicles = EmpireLockedDB.chronicles or {}
-    return EmpireLockedDB.chronicles
+    local realmDB=self:GetRealmDB()
+    realmDB.chronicles=realmDB.chronicles or {}
+    return realmDB.chronicles
 end
 
 function EL:ResetEmpire()
     if self:GetEmpire() then
         self:ArchiveCurrentEmpire("Manual reset")
     end
-    EmpireLockedDB.empire = nil
+    self:GetRealmDB().empire = nil
 end
 
 function EL:GetCharacterKey()

@@ -8,7 +8,7 @@ Build your own equipment. Support your Empire through professions. Keep your Sub
 
 Empire Locked is a self-imposed World of Warcraft challenge addon built around a group of characters on the same account forming a single crafting-based Empire.
 
-> Current release: **v0.6.5**
+> Current release: **v0.6.6**
 >
 > Empire Locked is still under active development.
 
@@ -276,6 +276,17 @@ Making a backup of your SavedVariables before testing development releases is st
 Empire Locked is currently being developed and tested against the WoW environment for which this release was built.
 
 WoW addon APIs differ substantially between client generations. A future port to newer client versions may require API compatibility changes even though the challenge rules themselves remain the same.
+
+---
+
+
+## Realm Separation
+
+Empire data is stored **per realm/server**.
+
+Characters on the same realm share one Empire database, while characters on another realm have a completely separate active Empire and Chronicle archive.
+
+When upgrading from v0.6.5 or earlier, the existing account-wide Empire data is automatically migrated to the realm you first log into after installing v0.6.6. Backing up SavedVariables before upgrading is still recommended.
 
 ---
 
