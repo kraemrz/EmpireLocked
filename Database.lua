@@ -1,7 +1,7 @@
 EmpireLocked = EmpireLocked or {}
 local EL = EmpireLocked
 
-EL.VERSION = "0.6.7"
+EL.VERSION = "0.6.2"
 
 local function DefaultDB()
     return {

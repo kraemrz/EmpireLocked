@@ -2,7 +2,7 @@
 ## Title: Empire Locked
 ## Notes: Account-wide self-imposed Hardcore empire challenge.
 ## Author: Kramer + ChatGPT
-## Version: 0.6.7
+## Version: 0.6.8
 ## SavedVariables: EmpireLockedDB
 
 Database.lua

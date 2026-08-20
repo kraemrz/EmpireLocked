@@ -6,13 +6,6 @@ local GEAR_NAME_WHITELIST = {
 EmpireLocked = EmpireLocked or {}
 local EL = EmpireLocked
 
--- Normal character equipment uses slots 1-19.
--- Equipped bags live in inventory slots 20-23 and are part of the
--- Empire-crafted equipment rule as of v0.6.7.
-local NORMAL_EQUIPMENT_LAST_SLOT = 19
-local BAG_EQUIPMENT_FIRST_SLOT = 20
-local BAG_EQUIPMENT_LAST_SLOT = 23
-
 
 local function SafeCall(func, ...)
     if type(func) ~= "function" then return nil end
@@ -41,6 +34,7 @@ local function EnsureLedger()
     empire.gearLedger.initializedCharacters = empire.gearLedger.initializedCharacters or {}
     empire.gearLedger.starterApproved = empire.gearLedger.starterApproved or {}
     empire.gearLedger.starterSlots = empire.gearLedger.starterSlots or {}
+    empire.gearLedger.starterBags = empire.gearLedger.starterBags or {}
     empire.gearLedger.legacySlots = empire.gearLedger.legacySlots or {}
     empire.gearStatus = empire.gearStatus or {}
 
@@ -114,15 +108,65 @@ local function GetEquippedItem(slot)
     }
 end
 
+-- Equipped bags are not exposed like normal equipment on this Classic client.
+-- The verified API path is:
+--   bagID 1..4
+--   C_Container.GetBagName(bagID)
+--   C_Container.ContainerIDToInventoryID(bagID) -> 31..34 on the tested client.
+local function GetEquippedBag(bagID)
+    if not C_Container or type(C_Container.GetBagName) ~= "function" then
+        return nil
+    end
+
+    local name = SafeCall(C_Container.GetBagName, bagID)
+    if not name then return nil end
+
+    local invSlot
+    if type(C_Container.ContainerIDToInventoryID) == "function" then
+        invSlot = SafeCall(C_Container.ContainerIDToInventoryID, bagID)
+    elseif GetInventorySlotInfo then
+        invSlot = GetInventorySlotInfo("BAG" .. tostring(bagID - 1) .. "SLOT")
+    end
+
+    local location = invSlot and MakeEquipLocation(invSlot) or nil
+    local guid = GetGUID(location)
+
+    local itemID
+    if location and C_Item and type(C_Item.GetItemID) == "function" then
+        itemID = SafeCall(C_Item.GetItemID, location)
+    end
+
+    local itemLink
+    if invSlot then
+        itemLink = SafeCall(GetInventoryItemLink, "player", invSlot)
+    end
+
+    -- Some Classic clients return nil for GetInventoryItemLink on bag slots.
+    -- Name + bagID still proves that a bag is equipped; GUID/ID are bonuses
+    -- used for craft-ledger verification where available.
+    return {
+        slot = invSlot,
+        bagID = bagID,
+        slotType = "BAG",
+        guid = guid,
+        itemID = itemID or ItemIDFromLink(itemLink),
+        itemLink = itemLink,
+        name = name,
+    }
+end
+
 local function SnapshotEquippedBags()
     local result = {}
-    for slot = BAG_EQUIPMENT_FIRST_SLOT, BAG_EQUIPMENT_LAST_SLOT do
-        local item = GetEquippedItem(slot)
+    for bagID = 1, 4 do
+        local item = GetEquippedBag(bagID)
         if item then
-            result[slot] = {
+            result[bagID] = {
+                bagID = bagID,
+                slot = item.slot,
+                guid = item.guid,
                 itemID = item.itemID,
                 itemLink = item.itemLink,
-                guid = item.guid,
+                name = item.name,
             }
         end
     end
@@ -133,9 +177,9 @@ local function EquippedBagSnapshotChanged(before, after)
     before = before or {}
     after = after or {}
 
-    for slot = BAG_EQUIPMENT_FIRST_SLOT, BAG_EQUIPMENT_LAST_SLOT do
-        local a = before[slot]
-        local b = after[slot]
+    for bagID = 1, 4 do
+        local a = before[bagID]
+        local b = after[bagID]
 
         if (a == nil) ~= (b == nil) then
             return true
@@ -144,7 +188,9 @@ local function EquippedBagSnapshotChanged(before, after)
         if a and b then
             if a.guid and b.guid then
                 if a.guid ~= b.guid then return true end
-            elseif a.itemLink ~= b.itemLink or a.itemID ~= b.itemID then
+            elseif a.itemID and b.itemID then
+                if a.itemID ~= b.itemID then return true end
+            elseif a.name ~= b.name then
                 return true
             end
         end
@@ -234,7 +280,7 @@ function EL:MarkStarterGear()
     local marked = 0
 
     if UnitLevel("player") == 1 then
-        for slot = 1, BAG_EQUIPMENT_LAST_SLOT do
+        for slot = 1, 19 do
             local item = GetEquippedItem(slot)
             if item then
                 -- Slot + itemID is the fallback for Classic clients where an
@@ -262,6 +308,30 @@ function EL:MarkStarterGear()
                     }
                 end
 
+                marked = marked + 1
+            end
+        end
+
+        ledger.starterBags = ledger.starterBags or {}
+        ledger.starterBags[key] = ledger.starterBags[key] or {}
+        for bagID = 1, 4 do
+            local bag = GetEquippedBag(bagID)
+            if bag then
+                ledger.starterBags[key][bagID] = {
+                    guid = bag.guid,
+                    itemID = bag.itemID,
+                    name = bag.name,
+                    capturedAt = time(),
+                }
+                if bag.guid then
+                    ledger.approved[bag.guid] = ledger.approved[bag.guid] or {
+                        guid = bag.guid,
+                        itemID = bag.itemID,
+                        itemLink = bag.itemLink,
+                        crafter = "STARTER_GEAR",
+                        approvedReason = "STARTER_GEAR",
+                    }
+                end
                 marked = marked + 1
             end
         end
@@ -298,7 +368,7 @@ function EL:InitializeGearObservation()
 
         -- Existing equipment is legacy-unverified unless it was explicitly
         -- approved as level-1 starter gear or has a valid Made by tag.
-        for slot = 1, BAG_EQUIPMENT_LAST_SLOT do
+        for slot = 1, 19 do
             local item = GetEquippedItem(slot)
             if item and item.guid and not ledger.approved[item.guid] then
                 local creator = GetEquippedCrafter(slot)
@@ -347,10 +417,25 @@ function EL:InitializeGearObservation()
             end
         end
 
+        ledger.legacyBags = ledger.legacyBags or {}
+        ledger.legacyBags[key] = ledger.legacyBags[key] or {}
+        for bagID = 1, 4 do
+            local bag = GetEquippedBag(bagID)
+            if bag then
+                ledger.legacyBags[key][bagID] = {
+                    guid = bag.guid,
+                    itemID = bag.itemID,
+                    name = bag.name,
+                    capturedAt = time(),
+                }
+            end
+        end
+
         ledger.initializedCharacters[key] = time()
     end
 
     self._gearBagSnapshot = SnapshotBagItems()
+    self._equippedBagSnapshot = SnapshotEquippedBags()
     self._equippedBagSnapshot = SnapshotEquippedBags()
 end
 
@@ -449,6 +534,62 @@ function EL:ObserveNewBagItems()
     self._gearBagSnapshot = now
 end
 
+local function GetEquippedBagState(item)
+    local ledger = EnsureLedger()
+    if not ledger or not item then return "UNKNOWN", nil end
+
+    local key = EL:GetCharacterKey()
+
+    -- Strongest proof: exact physical bag instance was recorded as Empire-crafted.
+    if item.guid and ledger.approved[item.guid] then
+        local entry = ledger.approved[item.guid]
+        if entry.approvedReason == "STARTER_GEAR" then
+            return "APPROVED", "Starter bag"
+        end
+        return "APPROVED", "Empire craft ledger"
+    end
+
+    -- Level-1 starter bag snapshot, slot-specific.
+    local starter = ledger.starterBags
+        and ledger.starterBags[key]
+        and item.bagID
+        and ledger.starterBags[key][item.bagID]
+
+    if starter then
+        if starter.guid and item.guid and starter.guid == item.guid then
+            return "APPROVED", "Starter bag"
+        end
+        if starter.itemID and item.itemID and starter.itemID == item.itemID then
+            return "APPROVED", "Starter bag"
+        end
+        if starter.name and item.name and starter.name == item.name then
+            return "APPROVED", "Starter bag"
+        end
+    end
+
+    -- Grandfather bags that were already equipped when bag enforcement first
+    -- became available. They remain UNVERIFIED rather than causing a false fail.
+    local legacy = ledger.legacyBags
+        and ledger.legacyBags[key]
+        and item.bagID
+        and ledger.legacyBags[key][item.bagID]
+
+    if legacy then
+        if legacy.guid and item.guid and legacy.guid == item.guid then
+            return "UNKNOWN", "Bag origin predates verification"
+        end
+        if legacy.itemID and item.itemID and legacy.itemID == item.itemID then
+            return "UNKNOWN", "Bag origin predates verification"
+        end
+        if legacy.name and item.name and legacy.name == item.name then
+            return "UNKNOWN", "Bag origin predates verification"
+        end
+    end
+
+    -- A newly equipped bag with no Empire craft proof is illegal.
+    return "ILLEGAL", "Bag is not verified as Empire-crafted"
+end
+
 function EL:GetGearState(item)
     local itemName = item and item.itemLink and item.itemLink:match("%[(.-)%]")
     if itemName and GEAR_NAME_WHITELIST[itemName] then
@@ -540,9 +681,11 @@ local function BuildGearStatus()
         checkedAt = time(),
     }
 
-    for slot = 1, BAG_EQUIPMENT_LAST_SLOT do
+    -- Normal equipment.
+    for slot = 1, 19 do
         local item = GetEquippedItem(slot)
         if item then
+            item.slotType = "GEAR"
             local state, reason = EL:GetGearState(item)
 
             if state == "APPROVED" then status.approved = status.approved + 1
@@ -551,7 +694,32 @@ local function BuildGearStatus()
 
             table.insert(status.items, {
                 slot = slot,
-                slotType = (slot >= BAG_EQUIPMENT_FIRST_SLOT and slot <= BAG_EQUIPMENT_LAST_SLOT) and "BAG" or "GEAR",
+                slotType = "GEAR",
+                state = state,
+                reason = reason,
+                itemID = item.itemID,
+                itemLink = item.itemLink,
+                guid = item.guid,
+                name = item.name,
+            })
+        end
+    end
+
+    -- Equipped bags (bagID 1..4). These must use the container API because
+    -- GetInventoryItemLink can return nil for the client-specific bag slots.
+    for bagID = 1, 4 do
+        local item = GetEquippedBag(bagID)
+        if item then
+            local state, reason = GetEquippedBagState(item)
+
+            if state == "APPROVED" then status.approved = status.approved + 1
+            elseif state == "ILLEGAL" then status.illegal = status.illegal + 1
+            else status.unknown = status.unknown + 1 end
+
+            table.insert(status.items, {
+                slot = item.slot,
+                bagID = bagID,
+                slotType = "BAG",
                 state = state,
                 reason = reason,
                 itemID = item.itemID,

@@ -8,7 +8,7 @@ Build your own equipment. Support your Empire through professions. Keep your Sub
 
 Empire Locked is a self-imposed World of Warcraft challenge addon built around a group of characters on the same account forming a single crafting-based Empire.
 
-> Current release: **v0.6.7**
+> Current release: **v0.6.8**
 >
 > Empire Locked is still under active development.
 
