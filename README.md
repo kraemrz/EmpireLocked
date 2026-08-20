@@ -8,7 +8,7 @@ Build your own equipment. Support your Empire through professions. Keep your Sub
 
 Empire Locked is a self-imposed World of Warcraft challenge addon built around a group of characters on the same account forming a single crafting-based Empire.
 
-> Current release: **v0.6.6**
+> Current release: **v0.6.7**
 >
 > Empire Locked is still under active development.
 
@@ -55,6 +55,8 @@ Empire Locked uses item information such as the **Made by** tag to verify crafte
 Starter equipment is recognized separately so a newly created character can begin the challenge normally.
 
 Bags are part of the equipment rules as well: dropped or externally purchased bags are not intended to become free upgrades simply because they are containers.
+
+Equipped bag slots are scanned by the same gear-verification system as weapons and armor.
 
 ### No Auction House
 

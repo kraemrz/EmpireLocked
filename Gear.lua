@@ -6,6 +6,14 @@ local GEAR_NAME_WHITELIST = {
 EmpireLocked = EmpireLocked or {}
 local EL = EmpireLocked
 
+-- Normal character equipment uses slots 1-19.
+-- Equipped bags live in inventory slots 20-23 and are part of the
+-- Empire-crafted equipment rule as of v0.6.7.
+local NORMAL_EQUIPMENT_LAST_SLOT = 19
+local BAG_EQUIPMENT_FIRST_SLOT = 20
+local BAG_EQUIPMENT_LAST_SLOT = 23
+
+
 local function SafeCall(func, ...)
     if type(func) ~= "function" then return nil end
     local ok, a, b, c, d, e = pcall(func, ...)
@@ -106,6 +114,45 @@ local function GetEquippedItem(slot)
     }
 end
 
+local function SnapshotEquippedBags()
+    local result = {}
+    for slot = BAG_EQUIPMENT_FIRST_SLOT, BAG_EQUIPMENT_LAST_SLOT do
+        local item = GetEquippedItem(slot)
+        if item then
+            result[slot] = {
+                itemID = item.itemID,
+                itemLink = item.itemLink,
+                guid = item.guid,
+            }
+        end
+    end
+    return result
+end
+
+local function EquippedBagSnapshotChanged(before, after)
+    before = before or {}
+    after = after or {}
+
+    for slot = BAG_EQUIPMENT_FIRST_SLOT, BAG_EQUIPMENT_LAST_SLOT do
+        local a = before[slot]
+        local b = after[slot]
+
+        if (a == nil) ~= (b == nil) then
+            return true
+        end
+
+        if a and b then
+            if a.guid and b.guid then
+                if a.guid ~= b.guid then return true end
+            elseif a.itemLink ~= b.itemLink or a.itemID ~= b.itemID then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
 -- Hidden tooltip used only for reading Blizzard's own item text.
 local scanner = CreateFrame("GameTooltip", "EmpireLockedScannerTooltip", UIParent, "GameTooltipTemplate")
 scanner:SetOwner(UIParent, "ANCHOR_NONE")
@@ -187,7 +234,7 @@ function EL:MarkStarterGear()
     local marked = 0
 
     if UnitLevel("player") == 1 then
-        for slot = 1, 19 do
+        for slot = 1, BAG_EQUIPMENT_LAST_SLOT do
             local item = GetEquippedItem(slot)
             if item then
                 -- Slot + itemID is the fallback for Classic clients where an
@@ -251,7 +298,7 @@ function EL:InitializeGearObservation()
 
         -- Existing equipment is legacy-unverified unless it was explicitly
         -- approved as level-1 starter gear or has a valid Made by tag.
-        for slot = 1, 19 do
+        for slot = 1, BAG_EQUIPMENT_LAST_SLOT do
             local item = GetEquippedItem(slot)
             if item and item.guid and not ledger.approved[item.guid] then
                 local creator = GetEquippedCrafter(slot)
@@ -304,6 +351,7 @@ function EL:InitializeGearObservation()
     end
 
     self._gearBagSnapshot = SnapshotBagItems()
+    self._equippedBagSnapshot = SnapshotEquippedBags()
 end
 
 function EL:BeginTrackedCraft(recipeID, outputItemID, outputLink)
@@ -492,7 +540,7 @@ local function BuildGearStatus()
         checkedAt = time(),
     }
 
-    for slot = 1, 19 do
+    for slot = 1, BAG_EQUIPMENT_LAST_SLOT do
         local item = GetEquippedItem(slot)
         if item then
             local state, reason = EL:GetGearState(item)
@@ -503,6 +551,7 @@ local function BuildGearStatus()
 
             table.insert(status.items, {
                 slot = slot,
+                slotType = (slot >= BAG_EQUIPMENT_FIRST_SLOT and slot <= BAG_EQUIPMENT_LAST_SLOT) and "BAG" or "GEAR",
                 state = state,
                 reason = reason,
                 itemID = item.itemID,
@@ -550,9 +599,15 @@ function EL:CheckEquippedGear()
             if not third or third.illegal == 0 then return end
 
             local names = {}
+            local illegalBags = 0
             for _, entry in ipairs(third.items or {}) do
                 if entry.state == "ILLEGAL" then
-                    table.insert(names, entry.itemLink or entry.name or "?")
+                    if entry.slotType == "BAG" then
+                        illegalBags = illegalBags + 1
+                        table.insert(names, "Bag: " .. (entry.itemLink or entry.name or "?"))
+                    else
+                        table.insert(names, entry.itemLink or entry.name or "?")
+                    end
                 end
             end
 
@@ -607,9 +662,16 @@ function EL:PrintGearStatus()
             or item.state=="ILLEGAL" and "|cffff5555"
             or "|cffffcc33"
 
+        local slotLabel
+        if item.slotType == "BAG" then
+            slotLabel = "Bag " .. tostring(item.slot - BAG_EQUIPMENT_FIRST_SLOT + 1)
+        else
+            slotLabel = "Slot " .. tostring(item.slot)
+        end
+
         self:Print(string.format(
-            "  Slot %d: %s%s|r - %s |cffaaaaaa(%s)|r",
-            item.slot,
+            "  %s: %s%s|r - %s |cffaaaaaa(%s)|r",
+            slotLabel,
             color,
             item.itemLink or item.name or "?",
             item.state,
@@ -671,6 +733,16 @@ frame:SetScript("OnEvent", function(_, event)
         if empire and empire.characters[EL:GetCharacterKey()] then
             C_Timer.After(0.15, function()
                 EL:ObserveNewBagItems()
+
+                -- Equipping/replacing a bag can be reported as a bag update on
+                -- some Classic clients. Only run the fail-capable gear check
+                -- when the actual equipped bag slots changed, not on every
+                -- ordinary loot/bag-content update.
+                local nowEquippedBags = SnapshotEquippedBags()
+                if EquippedBagSnapshotChanged(EL._equippedBagSnapshot, nowEquippedBags) then
+                    EL._equippedBagSnapshot = nowEquippedBags
+                    EL:CheckEquippedGear()
+                end
             end)
         end
 
@@ -678,6 +750,7 @@ frame:SetScript("OnEvent", function(_, event)
         local empire = EL:GetEmpire()
         if empire and empire.characters[EL:GetCharacterKey()] then
             C_Timer.After(0.2, function()
+                EL._equippedBagSnapshot = SnapshotEquippedBags()
                 EL:CheckEquippedGear()
             end)
         end
